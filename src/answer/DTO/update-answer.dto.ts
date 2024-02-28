@@ -1,20 +1,18 @@
-import { IsArray, IsInt, IsString, IsNotEmpty } from 'class-validator';
+import { IsArray, IsInt, IsOptional, IsString } from 'class-validator';
+import { BaseRespondDto } from '../../common/DTO/base-respond.dto';
 
-export class  UpdateAnswerDto {
+export class UpdateAnswerDto {
   @IsString()
-  title: string;
-
-  @IsString()
-  @IsNotEmpty()
+  // @IsNotEmpty()
   content: string;
 
-  @IsInt()
-  type: number;
-
   @IsArray()
+  @IsOptional()
   topics: number[];
 
   @IsInt()
+  @IsOptional()
   groupId: number;
-
 }
+
+export class UpdateRespondAnswerDto extends BaseRespondDto {}

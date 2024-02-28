@@ -1,25 +1,28 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { AnswerModule } from './answer/answer.module';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-
+import { AnswerModule } from './answer/answer.module';
+import configuration, {
+  databaseConfigFactory,
+} from './common/config/configuration';
+import { GroupsModule } from './groups/groups.module';
+import { QuestionsModule } from './questions/questions.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forRoot({
-      type: 'mysql',
-      host: 'localhost',
-      port: 3306,
-      username: 'root',
-      password: 'root',
-      database: 'test',
-      entities: [],
-      synchronize: true,
+    ConfigModule.forRoot({ load: [configuration] }),
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: databaseConfigFactory,
+      inject: [ConfigService],
     }),
-    AnswerModule
+    UsersModule,
+    QuestionsModule,
+    AnswerModule,
+    GroupsModule,
   ],
-  controllers: [AppController],
-  providers: [AppService],
+  controllers: [],
+  providers: [],
 })
 export class AppModule {}

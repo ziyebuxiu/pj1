@@ -1,80 +1,94 @@
 import {
-    Column,
-    CreateDateColumn,
-    DeleteDateColumn,
-    Entity,
-    Index,
-    PrimaryGeneratedColumn,
-    UpdateDateColumn,
-  } from 'typeorm';
-import { ColumnMetadata } from 'typeorm/metadata/ColumnMetadata';
-  
-  @Entity()
-  export class Answer {
-    @PrimaryGeneratedColumn()
-    id: string;
-  
-    @Column()
-    @Index({ unique: false })
-    askerUserId: number;
-  
-    // Use column type 'text' to support arbitrary length of string.
-    @Column('text')
-    // Use fulltext index to support fulltext search.
-    @Index({ fulltext: true, parser: 'ngram' })
-    title: string;
-  
-    // Use column type 'text' to support arbitrary length of string.
-    @Column('text')
-    // Use fulltext index to support fulltext search.
-    @Index({ fulltext: true, parser: 'ngram' })
-    content: string;
-  
-    @Column()
-    type: number;
-  
-    @Column({ nullable: true })
-    @Index({ unique: false })
-    groupId?: number;
-  
-    @CreateDateColumn()
-    createdAt: Date;
-  
-    @UpdateDateColumn()
-    updatedAt: Date;
-  
-    @DeleteDateColumn()
-    deletedAt: Date;
+  Column,
+  CreateDateColumn,
+  DeleteDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  JoinTable,
+  ManyToMany,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { User } from '../users/users.legacy.entity';
 
-    //likes
-    @Column('text', {array: true, nullable: true})
-    likes: string[];
+@Entity()
+export class Answer {
+  @PrimaryGeneratedColumn()
+  id: number;
 
-    @Column({default: 0})
-    likesCount: number;
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'userId' })
+  author: User;
 
-    //favorite
-    @Column({default: false})
-    isFavorited: boolean;
+  @Column()
+  userId: number;
 
-    @Column({
-        type: 'simple-array',
-        default: [],
-        transformer: {
-          to: (value: string[]) => JSON.stringify(value),
-          from: (value: string) => JSON.parse(value)
-        }
-    })
-    favoritedBy: string[];
+  @Column()
+  @Index({ unique: false })
+  questionId: number; //askeruser_Id
 
-    @Column({default: 0})
-    favoriteCount: number;
+  // Use column type 'text' to support arbitrary length of string.
+  @Column('text')
+  // Use fulltext index to support fulltext search.
+  @Index({ fulltext: true, parser: 'ngram' })
+  content: string;
 
-    //comment
-    @Column({ type: 'simple-json', nullable: true }) 
-    comments: { userId: string, comment: string, createdAt: Date }[]; 
+  // @Column()
+  // type: Answer;
 
-    @Column({default: 0})
-    commentCount: number;
-  
-  }
+  @Column()
+  is_group: boolean;
+
+  @Column({ nullable: true })
+  @Index({ unique: false })
+  groupId?: number;
+
+  @OneToMany(() => UserAttitudeOnAnswer, (attitude) => attitude.answer, {
+    cascade: true,
+  })
+  attitudes: UserAttitudeOnAnswer[];
+
+  @ManyToMany(() => User)
+  @JoinTable()
+  favoritedBy: User[];
+
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
+
+  @DeleteDateColumn()
+  deletedAt: Date;
+}
+
+@Entity()
+export class UserAttitudeOnAnswer {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @ManyToOne(() => User)
+  user: User;
+
+  @Column()
+  userId: number;
+
+  @ManyToOne(() => Answer, (answer) => answer.attitudes, {
+    onDelete: 'CASCADE',
+  })
+  answer: Answer;
+
+  @Column()
+  answerId: number;
+
+  @Column({ default: 0 })
+  type: number;
+}
+
+// export enum AttitudeType {
+//   Agree = 1,
+//   Disagree = 2,
+// }

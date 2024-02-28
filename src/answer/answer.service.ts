@@ -1,134 +1,296 @@
+//返回dto，不要返回实体——参见API的answer，就是要返回dto
+//看group怎么拿Id
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 //mport { AnswerModule } from './answer.module';
-import { Answer } from './answer.entity';
-import { CreateAnswerDto } from './dto/create-answer.dto';
-import { UpdateAnswerDto } from './dto/update-answer.dto';
-
+import { PageRespondDto } from '../common/DTO/page-respond.dto';
+import { PageHelper } from '../common/helper/page.helper';
+import { UserIdNotFoundError } from '../users/users.error';
+import { User } from '../users/users.legacy.entity';
+import { UsersService } from '../users/users.service';
+import { AgreeAnswerDto } from './DTO/agree-answer.dto';
+import { AnswerDto } from './DTO/answer.dto';
+import { Answer, UserAttitudeOnAnswer } from './answer.entity';
+import {
+  AlreadyHasSameAttitudeError,
+  AnswerNotFavoriteError,
+  AnswerNotFoundError,
+} from './answer.error';
 @Injectable()
 export class AnswerService {
-    constructor(
-        @InjectRepository(Answer)
-        private answerRepository: Repository<Answer>,
-    ) {}
-    
-    async create(createAnswerDto: CreateAnswerDto): Promise<Answer> {
-        const createdAnswer = this.answerRepository.create(createAnswerDto);
-        return this.answerRepository.save(createdAnswer);
+  constructor(
+    private usersService: UsersService,
+    // private questionsService: QuestionsService,
+    @InjectRepository(Answer)
+    private answerRepository: Repository<Answer>,
+    @InjectRepository(UserAttitudeOnAnswer)
+    private userAttitudeRepository: Repository<UserAttitudeOnAnswer>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+  ) {}
+
+  async createAnswer(
+    questionId: number,
+    userId: number,
+    content: string,
+  ): Promise<number> {
+    const createdAnswer = this.answerRepository.create({
+      questionId,
+      userId,
+      content,
+    });
+    createdAnswer.is_group = false;
+    await this.answerRepository.save(createdAnswer);
+
+    const answerId = createdAnswer.id;
+    const userAttitude = this.userAttitudeRepository.create({
+      userId,
+      answerId: answerId,
+    });
+    await this.userAttitudeRepository.save(userAttitude);
+    // const userDto = await this.usersService.getUserDtoById(userId);
+    return createdAnswer.id;
+  }
+
+  async getQuestionAnswers(
+    questionId: number | undefined,
+    page_start: number | undefined,
+    page_size: number,
+  ): Promise<[AnswerDto[], PageRespondDto]> {
+    const queryBuilder = this.answerRepository
+      .createQueryBuilder('answer')
+      .where('answer.questionId = :questionId', { questionId })
+      .orderBy('answer.createdAt');
+    let prevPage = undefined,
+      currPage = undefined;
+    /* istanbul ignore if */
+    if (!page_start) {
+      currPage = await queryBuilder.limit(page_size + 1).getMany();
+      const currDto = await Promise.all(
+        currPage.map(async (entity) => {
+          const userId = entity.id;
+          return this.getAnswerById(userId, questionId, entity.id);
+        }),
+      );
+      return PageHelper.PageStart(currDto, page_size, (answer) => answer.id);
+    } else {
+      const start = await this.answerRepository.findOneBy({ id: page_start });
+      /* istanbul ignore if */
+      if (!start) {
+        throw new AnswerNotFoundError(page_start);
+      }
+      const queryBuilderCopy = queryBuilder.clone();
+      prevPage = await queryBuilder
+        .orderBy('id', 'ASC')
+        .andWhere('id > :page_start', { page_start })
+        .limit(page_size)
+        .getMany();
+      currPage = await queryBuilderCopy
+        .orderBy('id', 'DESC')
+        .andWhere('id <= :page_start', { page_start })
+        .limit(page_size + 1)
+        .getMany();
+
+      // const currDto = await Promise.all(currPage.map(async (entity) => {
+      //     const userId = await this.getUserByAnswer(entity.id);
+      //     return this.getAnswerById(userId, questionId, entity.id);
+      // }));
+      const currDto = await Promise.all(
+        currPage.map(async (entity) => {
+          const userId = entity.id;
+          return this.getAnswerById(userId, questionId, entity.id);
+        }),
+      );
+      return PageHelper.PageMiddle(
+        prevPage,
+        currDto,
+        page_size,
+        (answer) => answer.id,
+        (answer) => answer.id,
+      );
+    }
+  }
+
+  async getAnswerById(
+    userId: number,
+    questionId: number | undefined,
+    answerId: number,
+  ): Promise<AnswerDto> {
+    const answer = await this.answerRepository.findOne({
+      where: { id: answerId },
+    });
+    if (!answer) {
+      throw new AnswerNotFoundError(answerId);
+    }
+    const userDto = await this.usersService.getUserDtoById(userId);
+
+    return {
+      id: answer.id,
+      question_id: answer.questionId,
+      content: answer.content,
+      author: userDto,
+      created_at: answer.createdAt.getTime(),
+      updated_at: answer.updatedAt.getTime(),
+      favorite_count: answer.favoritedBy?.length ?? 0,
+    };
+  }
+
+  async updateAnswer(
+    userId: number,
+    answerId: number,
+    content: string,
+  ): Promise<void> {
+    const answer = await this.answerRepository.findOne({
+      where: { id: answerId },
+    });
+
+    if (!answer) {
+      throw new AnswerNotFoundError(answerId);
     }
 
-    async getAnswersByQuestionId(questionId: string, page: number, limit: number, sortBy: string): Promise<Answer[]> {
-        const skip = (page - 1) * limit;
-        const queryBuilder = this.answerRepository
-        .createQueryBuilder('answer')
-        .where('answer.questionId = :questionId', { questionId })
-        .orderBy(`answer.${sortBy}`, 'DESC')  // Assuming sortBy is a column name for sorting
+    // Update the answer with the data from the DTO
+    answer.content = content;
 
-        if (page && limit) {
-            queryBuilder.skip(skip).take(limit);
-        }
+    // Save the updated answer
+    await this.answerRepository.save(answer);
+  }
 
-        return queryBuilder.getMany();
+  async deleteAnswer(
+    userId: number,
+    questionId: number,
+    answerId: number,
+  ): Promise<void> {
+    const answer = await this.answerRepository.findOne({
+      where: { id: answerId },
+    });
+    if (!answer) {
+      throw new AnswerNotFoundError(answerId);
     }
-    
-    
-    async updateAnswer(id: string, updateAnswerDto: UpdateAnswerDto): Promise<Answer> {
-        const answer = await this.answerRepository.findOne({ where: { id } });
+    await this.answerRepository.softRemove(answer);
+  }
 
-        if (!answer) {
-          throw new Error('Answer not found');
-        }
-    
-        // Update the answer with the data from the DTO
-        answer.content = updateAnswerDto.content;
-    
-        // Save the updated answer
-        return this.answerRepository.save(answer);
+  async agreeAnswer(
+    id: number,
+    userId: number,
+    agree_type: number,
+  ): Promise<AgreeAnswerDto> {
+    const answer = await this.answerRepository.findOneBy({ id });
+    const userDto = await this.usersService.getUserDtoById(userId);
+
+    if (!answer) {
+      throw new AnswerNotFoundError(id);
     }
 
-    async deleteAnswer(id: string): Promise<void> {
-        await this.answerRepository.delete(id);
+    // maybe need to check if the user has already agreed or disagreed
+    const userAttitude = await this.userAttitudeRepository.findOne({
+      where: { userId, answerId: id },
+    });
+
+    /* istanbul ignore else */
+    if (userAttitude) {
+      if (userAttitude.type == agree_type) {
+        throw new AlreadyHasSameAttitudeError(userId, id, agree_type);
+      }
+      userAttitude.type = agree_type;
+      await this.userAttitudeRepository.save(userAttitude);
+    } else {
+      await this.userAttitudeRepository.save({
+        userId,
+        answerId: id,
+        type: agree_type,
+      });
     }
 
-    async likeAnswer(id: string, userId: string): Promise<Answer> {
-        // 查找要点赞的答案
-        const answer = await this.answerRepository.findOne({ where: { id }});
+    const agree_count = await this.userAttitudeRepository.count({
+      where: { answerId: id, type: 1 },
+    });
+    const disagree_count = await this.userAttitudeRepository.count({
+      where: { answerId: id, type: 2 },
+    });
+    await this.answerRepository.save(answer);
+    return {
+      id: answer.id,
+      question_id: answer.questionId,
+      content: answer.content,
+      author: userDto,
+      agree_type,
+      agree_count,
+      disagree_count,
+    };
+  }
 
-        if (!answer) {
-            throw new Error('Answer not found');
-        }
-
-        // 检查用户是否已经点过赞
-        if (answer.likes && answer.likes.includes(userId)) {
-            throw new Error('User already liked this answer');
-        }
-
-        // 更新点赞信息
-        if (!answer.likes) {
-        answer.likes = [userId];
-        } else {
-        answer.likes.push(userId);
-        }
-
-        // 更新点赞计数
-        answer.likesCount = (answer.likesCount || 0) + 1;
-
-        // 保存更新后的答案
-        return this.answerRepository.save(answer);        
+  async favoriteAnswer(id: number, userId: number): Promise<AnswerDto> {
+    const answer = await this.answerRepository.findOne({
+      where: { id },
+      relations: ['favoritedBy'],
+    });
+    if (!answer) {
+      throw new AnswerNotFoundError(id);
     }
-    
-    async favoriteAnswer(id: string, userId: string): Promise<Answer> {
-        // 使用提供的 answerId 查询数据库中的特定答案实体
-        const answer = await this.answerRepository.findOne({ where: { id }});
 
-        // 检查答案是否存在
-        if (!answer) {
-            throw new Error('Answer not found');
-        }
-
-        if (answer.isFavorited && answer.favoritedBy.includes(userId)) {
-            throw new Error('User already favorited this answer');
-        }
-        // 更新答案信息，例如将其标记为用户喜欢的答案
-        if (!answer.favoritedBy) {
-            answer.favoritedBy = [userId]; // 如果favoritedBy为空，创建一个新的列表并添加用户ID
-          } else {
-            if (!answer.favoritedBy.includes(userId)) {
-              answer.favoritedBy.push(userId); // 如果用户ID不在列表中，添加用户ID
-            }
-          }
-        answer.isFavorited = true;
-
-        answer.favoriteCount = (answer.favoriteCount || 0) + 1;
-
-        return this.answerRepository.save(answer);
+    const user = await this.userRepository.findOneBy({ id: userId });
+    /* istanbul ignore if */
+    if (!user) {
+      throw new UserIdNotFoundError(userId);
     }
-    
-    async commentOnAnswer(id: string, comment: string, userId: string): Promise<Answer> {
-        const answer = await this.answerRepository.findOne({ where: { id }});
-        
-        if (answer) {
-            // 创建评论对象
-            const newComment = {
-                userId: userId,
-                comment: comment,
-                createdAt: new Date()
-            };
-
-            // 将评论添加到答案的评论列表中
-            if (!answer.comments) {
-            answer.comments = [newComment]; // 如果评论列表为空，创建一个新的列表并添加评论
-            } else {
-            answer.comments.push(newComment); // 如果评论列表不为空，直接添加评论
-            }
-
-            answer.commentCount = (answer.commentCount || 0) + 1;
-
-            return this.answerRepository.save(answer); // 返回更新后的答案对象
-        } else {
-            throw new Error('Answer not found');
-        }
+    /* istanbul ignore if */
+    if (!answer.favoritedBy) {
+      answer.favoritedBy = [user];
+    } else {
+      if (
+        !answer.favoritedBy.some(
+          (favoritedUser) => favoritedUser.id === user.id,
+        )
+      ) {
+        answer.favoritedBy.push(user);
+      }
     }
-    
+    // let favoriteCount;
+    // if (!answer.favoritedBy.length) {
+    //   favoriteCount = 0;
+    // } else {
+    //   favoriteCount = answer.favoritedBy.length;
+    // }
+    const favorite_count = answer.favoritedBy.length;
+    const userDto = await this.usersService.getUserDtoById(userId);
+    await this.answerRepository.save(answer);
+    return {
+      id: answer.id,
+      question_id: answer.questionId,
+      content: answer.content,
+      author: userDto,
+      created_at: answer.createdAt.getTime(),
+      updated_at: answer.updatedAt.getTime(),
+      favorite_count: favorite_count,
+    };
+  }
+
+  async unfavoriteAnswer(answerId: number, userId: number): Promise<void> {
+    const answer = await this.answerRepository.findOne({
+      where: { id: answerId },
+      relations: ['favoritedBy'],
+    });
+    if (!answer) {
+      throw new AnswerNotFoundError(answerId);
+    }
+
+    const user = await this.userRepository.findOneBy({ id: userId });
+    /* istanbul ignore if */
+    if (!user) {
+      throw new UserIdNotFoundError(userId);
+    }
+
+    if (
+      answer.favoritedBy &&
+      answer.favoritedBy.some((favoriteUser) => favoriteUser.id === user.id)
+    ) {
+      const index = answer.favoritedBy.indexOf(user);
+      answer.favoritedBy.splice(index, 1);
+    } else {
+      throw new AnswerNotFavoriteError(answerId);
+    }
+
+    await this.answerRepository.save(answer);
+  }
 }
